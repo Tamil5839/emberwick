@@ -1,0 +1,32 @@
+{
+  "name": "emberwick",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Emberwick - a 73-second silent 2D animated short, rendered entirely from code.",
+  "type": "module",
+  "scripts": {
+    "preview": "remotion studio",
+    "audio": "node scripts/build-audio.mjs",
+    "still": "node scripts/still.mjs",
+    "render": "node scripts/render.mjs",
+    "export": "node scripts/export.mjs",
+    "film": "npm run audio && npm run render && npm run export",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/bundler": "^4.0.526",
+    "@remotion/cli": "^4.0.526",
+    "@remotion/media-utils": "^4.0.526",
+    "@remotion/renderer": "^4.0.526",
+    "node-web-audio-api": "^2.2.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "remotion": "^4.0.526"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^7.0.2"
+  }
+}

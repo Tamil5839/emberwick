@@ -1,0 +1,8 @@
+node_modules/
+
+# Rendered output — regenerate with `npm run film`
+out/
+public/*.wav
+
+# macOS
+.DS_Store
