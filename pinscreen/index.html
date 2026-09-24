@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050506" />
+    <title>Pinscreen</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="stage"></canvas>
+      <video id="webcam" playsinline muted></video>
+
+      <header class="hud hud--top-left" data-ui>
+        <span class="wordmark">Pinscreen</span>
+        <span class="stats" id="stats"></span>
+      </header>
+
+      <div class="hud hud--bottom-right" data-ui>
+        <button type="button" class="btn" id="reset-view" title="Reset the camera view">Reset view</button>
+      </div>
+
+      <div class="overlay" id="overlay" hidden>
+        <div class="card" role="dialog" aria-live="polite" aria-labelledby="overlay-title">
+          <div class="card__icon" id="overlay-icon" aria-hidden="true"></div>
+          <h1 class="card__title" id="overlay-title"></h1>
+          <p class="card__body" id="overlay-body"></p>
+          <button type="button" class="btn btn--primary" id="overlay-action" hidden></button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
