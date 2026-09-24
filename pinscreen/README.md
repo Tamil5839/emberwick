@@ -36,6 +36,20 @@ npm run build     # typecheck + production build → dist/
 npm run preview   # serve the production build
 ```
 
+### Deploy to Vercel
+
+The repo root has a `vercel.json` that installs and builds only `pinscreen/`
+and serves `pinscreen/dist`, so no project settings are needed:
+
+1. In Vercel, **Add New… → Project**, and import this GitHub repository.
+2. Leave **Root Directory** as the repository root, and don't change any
+   build settings. `vercel.json` provides them.
+3. Press **Deploy**. Every later push to the branch redeploys automatically.
+
+Vercel serves over HTTPS, which the camera requires. The output is fully
+static: about 13 MB, mostly MediaPipe's WebAssembly, which only loads when a
+feature needs it. Hashed assets are cached for a year.
+
 ## Controls
 
 ### Mouse
