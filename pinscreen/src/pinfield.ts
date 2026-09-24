@@ -90,6 +90,11 @@ export class PinField {
 
   /** Current (smoothed) height of each pin above its rest position. */
   heights = new Float32Array(0);
+  /** What's on screen: heights plus any ripple offset. */
+  private shown = new Float32Array(0);
+  /** World-space x/y of each pin, for effects and click hits. */
+  posX = new Float32Array(0);
+  posY = new Float32Array(0);
   private blurTmp = new Float32Array(0);
   private neighbourZ = new Float32Array(0);
 
@@ -126,6 +131,9 @@ export class PinField {
 
     const { count } = layout;
     this.heights = new Float32Array(count);
+    this.shown = new Float32Array(count);
+    this.posX = new Float32Array(count);
+    this.posY = new Float32Array(count);
     this.blurTmp = new Float32Array(count);
     this.neighbourZ = new Float32Array(count);
 
@@ -153,6 +161,8 @@ export class PinField {
         m[o + 12] = pos.x;
         m[o + 13] = pos.y;
         m[o + 14] = this.restZ;
+        this.posX[i] = pos.x;
+        this.posY[i] = pos.y;
         this.neighbourZ[i] = this.restZ + this.headHeight;
       }
     }
@@ -170,23 +180,34 @@ export class PinField {
 
   /**
    * Eases every pin toward its target (value * depth) and writes the result
-   * straight into the instance matrix buffer; `snap` jumps straight there.
-   * Allocation-free.
+   * straight into the instance matrix buffer. `values` null holds the current
+   * shape (freeze); `snap` jumps straight to the targets; `offsets` (ripples)
+   * are added on top without disturbing the eased heights. Allocation-free.
    */
-  update(values: Float32Array, dt: number, snap = false): void {
+  update(values: Float32Array | null, dt: number, snap = false, offsets: Float32Array | null = null): void {
     const pins = this.pins;
     if (!pins) return;
-    const { heights } = this;
+    const { heights, shown } = this;
     const m = pins.instanceMatrix.array as Float32Array;
     const count = heights.length;
     const depth = Math.min(settings.depth, MAX_DEPTH);
     // Frame-rate independent version of "cover `smoothing` of the gap every 60 Hz frame".
     const k = snap ? 1 : 1 - Math.pow(1 - Math.min(Math.max(settings.smoothing, 0.001), 1), Math.min(dt, 0.1) * 60);
     const restZ = this.restZ;
+    // Ripples may dip below rest, but never so far that a head sinks out of sight.
+    const floor = -this.headHeight;
 
     for (let i = 0, o = 14; i < count; i++, o += 16) {
-      const h = heights[i] + (values[i] * depth - heights[i]) * k;
-      heights[i] = h;
+      let h = heights[i];
+      if (values) {
+        h += (values[i] * depth - h) * k;
+        heights[i] = h;
+      }
+      if (offsets) {
+        h += offsets[i];
+        if (h < floor) h = floor;
+      }
+      shown[i] = h;
       m[o] = restZ + h;
     }
     pins.instanceMatrix.needsUpdate = true;
@@ -202,7 +223,7 @@ export class PinField {
    */
   private updateNeighbourhood(): void {
     const { cols, rows, pitch } = this.layout;
-    const { heights, blurTmp: tmp, neighbourZ: out } = this;
+    const { shown: heights, blurTmp: tmp, neighbourZ: out } = this;
     const R = Math.max(AO_MIN_RADIUS, Math.min(AO_MAX_RADIUS, Math.round((settings.depth / pitch) * AO_REACH)));
     const lastCol = cols - 1;
     const lastRow = rows - 1;
@@ -310,6 +331,16 @@ export class PinField {
       board.add(bar);
     }
     return board;
+  }
+
+  /** Height of the middle of the relief above the plate, for click hit-testing. */
+  get midZ(): number {
+    return this.restZ + this.headHeight + Math.min(settings.depth, MAX_DEPTH) * 0.4;
+  }
+
+  /** True if world (x, y) lands on the pin field. */
+  contains(x: number, y: number): boolean {
+    return Math.abs(x) <= this.layout.fieldWidth / 2 && Math.abs(y) <= this.layout.fieldHeight / 2;
   }
 
   /** Half-extents of everything that can cast a shadow, for fitting the shadow camera. */

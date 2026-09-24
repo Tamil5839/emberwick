@@ -8,8 +8,12 @@ pinscreen animation.
 Vite + TypeScript + Three.js, no framework, no backend. Your video never
 leaves the browser.
 
-> **Status: phase 3 (recording).** The extra modes land in phase 4; see
-> [Roadmap](#roadmap).
+**What's in it:**
+- A webcam, image, video or typed-text source.
+- A panel for density, finish, light and picture.
+- One-key recording to MP4/WebM at 16:9, 9:16 or 1:1.
+- Extras: person-only segmentation, click ripples, and slow breathing when
+  nobody is in frame.
 
 ---
 
@@ -39,6 +43,7 @@ npm run preview   # serve the production build
 | Input | Action |
 | --- | --- |
 | Drag | Orbit around the board (it stops before you get behind it) |
+| Click (no drag) | Send a ripple through the pins from that spot |
 | Right-drag / two-finger drag | Pan |
 | Scroll / pinch | Zoom |
 | **Reset view** button | Back to the default, slightly off-axis framing |
@@ -53,7 +58,8 @@ npm run preview   # serve the production build
 | **Esc** | Cancel the countdown, or stop recording |
 | **C** | Clean mode: hide all UI, for capturing the window with OBS |
 
-Shortcuts are ignored while you're typing in a panel number field.
+Shortcuts are ignored while you're typing in a panel field (so you can type
+an H or a space in Text mode).
 
 ### Control panel
 
@@ -62,7 +68,8 @@ reloads. **Reset all settings** goes back to the defaults.
 
 | Folder | Control | What it does |
 | --- | --- | --- |
-| Source | Input | Webcam, Image or Video. Choosing Image or Video opens a file picker; nothing changes if you cancel. |
+| Source | Input | Webcam, Image, Video or Text. Choosing Image or Video opens a file picker; nothing changes if you cancel. |
+| | Text | *(Text mode only)* The word or phrase the pins spell, updated as you type |
 | | Open image or video… | Pick any image or video file. You can also **drag and drop** one onto the page. Files are never mirrored; the webcam is. |
 | Pins | Density | Low 80×60 · Medium 120×90 · High 160×120 · Insane 200×150 (rebuilds the board) |
 | | Finish | Steel · Brass · Black chrome · White matte |
@@ -78,6 +85,9 @@ reloads. **Reset all settings** goes back to the defaults.
 | | Auto sweep | Swing the light slowly round the board. Great on video. |
 | | Sweep speed | Degrees per second |
 | | Intensity / Reflections | Key-light strength / studio reflections on the metal |
+| Effects | Person only | MediaPipe selfie segmentation: only your silhouette rises; the background stays flat |
+| | Ripple on click | Clicking the board sends a wave through the pins (works while frozen too) |
+| | Breathe when away | With no face in front of the camera (or no picture at all), the pins breathe in slow 3D simplex noise |
 | Camera | Exposure | Overall brightness (after ACES tone mapping) |
 | | Depth of field | Optional bokeh pass (EffectComposer), auto-focused on the orbit target, off by default |
 | | Blur | Depth-of-field strength |
@@ -121,18 +131,53 @@ upload site ever rejects a browser MP4, re-wrap it without re-encoding:
 disappears, the cursor hides when still, and the view keeps whatever Frame
 you chose. Press C again to bring everything back.
 
+## Effects
+
+**Person only.** Tick it and a MediaPipe *selfie segmenter* runs on every
+camera frame. Its person mask is sampled through the same crop and mirror as
+the picture, so background pins sink flat and only you rise. Auto levels then
+measure only your pixels, so your face gets the whole pin range. The first
+time you tick it, MediaPipe loads (~12 MB of WebAssembly, a second or two
+locally). It runs on the GPU, falling back to CPU. It costs some frame rate,
+so leave it off when your background is already plain.
+
+**Ripples.** Click (don't drag) anywhere on the board and a damped circular
+wave spreads from that spot across the pins. Up to 8 overlap; each fades in
+about 3 seconds. Ripples sit on top of the picture without disturbing it, and
+work on a frozen board too.
+
+**Text.** Set *Input* to **Text** and type in the *Text* field. The pins spell
+it as you type. The words are drawn white-on-black at high resolution, sized
+to fit (long phrases break onto two lines), and slightly blurred, so the
+raised letters get a rounded bevel. Invert makes them engraved instead. The
+camera switches off while text is showing.
+
+**Breathing.** When nobody is in front of the camera for 1.5 seconds, the
+board eases into a slow, breathing landscape of 3D simplex noise, and eases
+back to you when you return. "Nobody" is judged by MediaPipe's BlazeFace
+detector, checked 2–3 times a second on the webcam. It also breathes
+whenever there's no picture at all, e.g. behind the camera-permission card.
+Images, videos and text never breathe.
+
+**Privacy.** The segmentation and face-detection models run entirely in your
+browser, and the models and WebAssembly are served by the app itself, so
+nothing is fetched from a CDN. MediaPipe normally sends anonymous usage
+metrics to Google once a minute (never images). Pinscreen blocks that one
+request, so nothing leaves your machine.
+
 ## How it works
 
 1. **Camera and sources** (`camera.ts`, `source.ts`): `getUserMedia` at
    640×480. Permission, missing camera, camera-in-use and insecure-origin
    failures each get a plain-English card with a retry button, plus a way to
-   use an image or video instead. Uploaded images are sampled once; videos and
-   the webcam are sampled only when a new frame arrives.
+   use an image or video instead. Uploaded images and text are sampled once;
+   videos and the webcam are sampled only when a new frame arrives.
 2. **Sampler** (`sampler.ts`): each new webcam frame is drawn, mirrored and
    cover-fitted, into a tiny canvas at grid resolution (120×90 by default),
    then turned into Rec. 709 luminance. Auto levels (2nd and 98.5th
    percentile, eased so the board doesn't pump) plus contrast, gamma and
-   invert run through a 256-entry lookup table.
+   invert run through a 256-entry lookup table. An optional person mask
+   multiplies the result.
 3. **Pin field** (`pinfield.ts`): one `InstancedMesh`. Each pin is an
    8-sided shaft plus a domed head, 40 triangles. The pins are hex-packed like
    a real pin-art toy (odd rows shifted half a pitch), so it reads as an
@@ -158,6 +203,14 @@ you chose. Press C again to bring everything back.
    `MediaRecorder` (chunked every second), and the download. The stage
    renders at the exact output size from the start of the countdown, so the
    first recorded frame is already warm.
+8. **Effects** (`effects.ts`): ripples (summed damped wave packets; only
+   pins inside each travelling ring are touched) and the breathing field.
+   The breathing is two octaves of simplex noise, sampled every 4th pin and
+   interpolated, so it's 16× cheaper than per-pin noise.
+9. **Vision** (`vision.ts`): MediaPipe tasks-vision wrappers for the selfie
+   segmenter and the face detector. The module is loaded with a dynamic
+   `import()`, so neither the library nor its WebAssembly touches the
+   initial page load.
 
 ### Things that make it look like a photograph
 
@@ -194,6 +247,10 @@ you chose. Press C again to bring everything back.
 - With depth of field on, MSAA resolves before tone mapping. A sub-pixel
   glint would then survive as a white "firefly", so pin highlights get a soft
   ceiling while it's active.
+- Face detection runs about 2.5 times a second on the CPU, not every frame.
+  Segmentation runs once per camera frame (30 Hz), and only while enabled.
+- The frame loop schedules itself before doing any work. One bad frame (say,
+  a camera hiccup) logs an error instead of freezing the board.
 
 > three r182+ removed `PCFSoftShadowMap`: it now logs a warning and falls back.
 > `PCFShadowMap` does the soft filtering itself (hardware PCF plus a rotated
@@ -233,6 +290,13 @@ you chose. Press C again to bring everything back.
   usually lighter than a Retina window.
 - **Keep the tab in front while recording.** Browsers pause background tabs,
   and the video would freeze.
+- **Busy room behind you?** Turn on *Person only*, so the bookshelf stops
+  competing with your face.
+- **The reveal:** start recording while out of frame, so the board is
+  breathing, then lean in. The noise settles into your face.
+- **Titles and outros:** Text mode with your handle, White matte finish and
+  Auto sweep on, recorded at 1:1 or 9:16. Click the board mid-take for a
+  ripple.
 - **Smoothness:** plug the laptop in, close other heavy tabs, and make sure
   your browser has hardware acceleration on (Chrome: Settings → System).
 
@@ -253,13 +317,20 @@ you chose. Press C again to bring everything back.
   (very old versions). Use current Chrome, Edge, Safari or Firefox, or use
   clean mode with OBS.
 - **Recording is choppy:** the video can only be as smooth as the render loop.
-  Lower the density, turn off depth of field, close other heavy tabs, and plug
-  the laptop in.
+  Lower the density, turn off depth of field or Person only, close other
+  heavy tabs, and plug the laptop in.
+- **"Person segmentation couldn't start":** the browser couldn't run
+  MediaPipe's WebAssembly (very old browsers, or strict privacy extensions
+  blocking WebAssembly). Everything else still works.
+- **Red "INFO: Created TensorFlow Lite XNNPACK delegate" lines in the
+  console** are MediaPipe's own start-up logging, not errors.
 
-## Roadmap
+## Credits
 
-- ~~Phase 1: core effect~~ ✓
-- ~~Phase 2: controls~~ ✓
-- ~~Phase 3: recording~~ ✓
-- **Phase 4, extras:** MediaPipe person segmentation, click ripples, text mode,
-  breathing idle mode.
+- [three.js](https://threejs.org) (MIT), [lil-gui](https://lil-gui.georgealways.com) (MIT),
+  [simplex-noise](https://github.com/jwagner/simplex-noise.js) (MIT).
+- [MediaPipe Tasks Vision](https://ai.google.dev/edge/mediapipe) (Apache-2.0), with the
+  *Selfie Segmenter* and *BlazeFace short-range* models (Apache-2.0), included
+  unmodified in `public/models/`.
+- Built in homage to Alexandre Alexeïeff and Claire Parker's pinscreen
+  (*Night on Bald Mountain*, 1933).

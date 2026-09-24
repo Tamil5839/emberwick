@@ -20,7 +20,7 @@ export const FINISHES: Record<FinishName, { color: string; metalness: number; ro
   'White matte': { color: '#e9e6df', metalness: 0, roughness: 0.82 },
 };
 
-export type SourceName = 'Webcam' | 'Image' | 'Video';
+export type SourceName = 'Webcam' | 'Image' | 'Video' | 'Text';
 
 export type FrameName = 'Fill window' | '16:9' | '9:16' | '1:1';
 export type RecordFormat = 'MP4' | 'WebM';
@@ -44,6 +44,8 @@ export const ROW_SPACING = Math.sqrt(3) / 2;
 
 export const settings = {
   source: 'Webcam' as SourceName,
+  /** What the pins spell out in Text mode. */
+  text: 'HELLO',
   density: 'Medium' as DensityName,
   finish: 'Steel' as FinishName,
 
@@ -85,6 +87,13 @@ export const settings = {
   recordQuality: 'High' as RecordQuality,
   /** Hide every bit of UI, for capturing the window with OBS. */
   cleanMode: false,
+
+  /** MediaPipe selfie segmentation: only your silhouette rises, the background stays flat. */
+  segmentation: false,
+  /** Clicking the board sends a wave through the pins. */
+  ripples: true,
+  /** With nobody in frame, the pins breathe in slow simplex noise. */
+  idleBreath: true,
 };
 
 export type Settings = typeof settings;

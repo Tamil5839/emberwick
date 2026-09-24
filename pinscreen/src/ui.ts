@@ -27,7 +27,11 @@ export interface UIHandlers {
   onDensityChange(): void;
   onFinishChange(): void;
   onUseWebcam(): void;
+  onUseText(): void;
+  onTextChange(): void;
   onFile(file: File): void;
+  onSegmentationChange(): void;
+  onIdleChange(): void;
   /** After "Reset all settings": re-apply anything that isn't read live every frame. */
   onSettingsReset(): void;
   onFrameChange(): void;
@@ -79,6 +83,7 @@ export class UI {
   private sweepSpeedControl!: Controller;
   private blurControl!: Controller;
   private recordControl!: Controller;
+  private textControl!: Controller;
   private activeSource: SourceName = 'Webcam';
 
   private frames = 0;
@@ -108,9 +113,11 @@ export class UI {
 
     const source = gui.addFolder('Source');
     this.sourceControl = source
-      .add(settings, 'source', ['Webcam', 'Image', 'Video'])
+      .add(settings, 'source', ['Webcam', 'Image', 'Video', 'Text'])
       .name('Input')
       .onChange((value: SourceName) => this.chooseSource(value));
+    this.textControl = source.add(settings, 'text').name('Text').onChange(() => h.onTextChange());
+    this.textControl.hide();
     source.add({ open: () => this.pickFile(MEDIA_ACCEPT) }, 'open').name('Open image or video…');
 
     const pins = gui.addFolder('Pins');
@@ -125,6 +132,7 @@ export class UI {
     picture.add(settings, 'contrast', 0.5, 3, 0.01).name('Contrast');
     picture.add(settings, 'gamma', 0.3, 3, 0.01).name('Gamma');
     picture.add(settings, 'invert').name('Invert (bright = in)');
+    picture.close();
 
     const light = gui.addFolder('Light');
     light.add(settings, 'lightElevation', 3, 60, 0.5).name('Angle (elevation)');
@@ -133,6 +141,11 @@ export class UI {
     this.sweepSpeedControl = light.add(settings, 'sweepSpeed', 1, 45, 0.5).name('Sweep speed (°/s)');
     light.add(settings, 'lightIntensity', 0, 10, 0.1).name('Intensity');
     light.add(settings, 'environment', 0, 2, 0.01).name('Reflections');
+
+    const effects = gui.addFolder('Effects');
+    effects.add(settings, 'segmentation').name('Person only').onChange(() => h.onSegmentationChange());
+    effects.add(settings, 'ripples').name('Ripple on click');
+    effects.add(settings, 'idleBreath').name('Breathe when away').onChange(() => h.onIdleChange());
 
     const camera = gui.addFolder('Camera');
     camera.add(settings, 'exposure', 0.2, 2.5, 0.01).name('Exposure');
@@ -155,6 +168,7 @@ export class UI {
       .name(formats.length ? '● Record (R)' : 'Recording not supported here')
       .enable(formats.length > 0);
     record.add(settings, 'cleanMode').name('Clean mode (C)').listen().onChange(() => this.applyCleanMode());
+    record.close();
 
     gui.add({ reset: () => this.resetAll() }, 'reset').name('Reset all settings');
     gui.onFinishChange(() => saveSettings());
@@ -169,6 +183,10 @@ export class UI {
       this.handlers.onUseWebcam();
       return;
     }
+    if (value === 'Text') {
+      this.handlers.onUseText();
+      return;
+    }
     // Stay on the current source until a file actually loads.
     this.setSource(this.activeSource);
     this.pickFile(value === 'Image' ? 'image/*' : 'video/*');
@@ -179,6 +197,12 @@ export class UI {
     this.activeSource = kind;
     settings.source = kind;
     this.sourceControl.updateDisplay();
+    this.textControl.show(kind === 'Text');
+  }
+
+  /** Puts a setting back (e.g. after a feature failed to load) and refreshes the panel. */
+  refresh(): void {
+    for (const c of this.gui.controllersRecursive()) c.updateDisplay();
   }
 
   private pickFile(accept: string): void {
@@ -196,7 +220,7 @@ export class UI {
     resetSettings();
     this.handlers.onSettingsReset();
     this.handlers.onFrameChange();
-    for (const c of this.gui.controllersRecursive()) c.updateDisplay();
+    this.refresh();
     this.syncDependentControls();
     this.syncFrozen();
     this.toast('Settings reset to defaults');
