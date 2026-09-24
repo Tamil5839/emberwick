@@ -27,7 +27,7 @@ export class Sampler {
   private readonly histogram = new Uint32Array(256);
   private readonly lut = new Float32Array(256);
 
-  private hasFrame = false;
+  private frameReady = false;
   private targetBlack = 0;
   private targetWhite = 255;
   private black = 0;
@@ -48,7 +48,12 @@ export class Sampler {
     this.canvas.height = rows;
     this.values = new Float32Array(cols * rows);
     this.luma = new Uint8Array(this.width * rows);
-    this.hasFrame = false;
+    this.frameReady = false;
+  }
+
+  /** True once a frame has been captured since the last resize or clear. */
+  get ready(): boolean {
+    return this.frameReady;
   }
 
   /** Physical aspect ratio (width / height) of the area the pins cover. */
@@ -120,17 +125,17 @@ export class Sampler {
     }
     this.targetBlack = black;
     this.targetWhite = white;
-    if (!this.hasFrame) {
+    if (!this.frameReady) {
       this.black = black;
       this.white = white;
-      this.hasFrame = true;
+      this.frameReady = true;
     }
   }
 
   /** Maps the latest luminance through levels/contrast/gamma into `values`. Cheap; run every frame. */
   apply(dt: number): Float32Array {
     const { values, luma, lut, cols, rows, width } = this;
-    if (!this.hasFrame) return values;
+    if (!this.frameReady) return values;
 
     let black = 0;
     let white = 255;
@@ -170,7 +175,7 @@ export class Sampler {
 
   /** Forget the current frame so the pins fall back flat. */
   clear(): void {
-    this.hasFrame = false;
+    this.frameReady = false;
     this.values.fill(0);
   }
 }

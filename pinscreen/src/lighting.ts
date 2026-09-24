@@ -76,15 +76,22 @@ export class Lighting {
     this.update();
   }
 
-  /** Applies the current settings; cheap when nothing changed. */
-  update(): void {
+  /**
+   * Applies the current settings and advances the auto sweep. Cheap when
+   * nothing changed; returns true when the shadows need re-rendering.
+   */
+  update(dt = 0): boolean {
     this.key.intensity = settings.lightIntensity;
     this.scene.environmentIntensity = settings.environment;
+
+    if (settings.autoSweep && dt > 0) {
+      settings.lightAzimuth = (settings.lightAzimuth + settings.sweepSpeed * dt) % 360;
+    }
 
     const elevation = MathUtils.clamp(settings.lightElevation, 2, 80);
     const azimuth = settings.lightAzimuth;
     const depth = settings.depth;
-    if (elevation === this.lastElevation && azimuth === this.lastAzimuth && depth === this.lastDepth) return;
+    if (elevation === this.lastElevation && azimuth === this.lastAzimuth && depth === this.lastDepth) return false;
     this.lastElevation = elevation;
     this.lastAzimuth = azimuth;
     this.lastDepth = depth;
@@ -103,6 +110,7 @@ export class Lighting {
     // reflections and shadows always agree.
     this.scene.environmentRotation.set(0, 0, az);
     this.fitShadowCamera(el);
+    return true;
   }
 
   /**

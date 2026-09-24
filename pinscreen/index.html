@@ -10,11 +10,12 @@
   <body>
     <div id="app">
       <canvas id="stage"></canvas>
-      <video id="webcam" playsinline muted></video>
+      <video id="webcam" class="feed" playsinline muted></video>
 
       <header class="hud hud--top-left" data-ui>
         <span class="wordmark">Pinscreen</span>
         <span class="stats" id="stats"></span>
+        <span class="badge" id="frozen-badge" hidden>Frozen</span>
       </header>
 
       <div class="hud hud--bottom-right" data-ui>
@@ -27,8 +28,15 @@
           <h1 class="card__title" id="overlay-title"></h1>
           <p class="card__body" id="overlay-body"></p>
           <button type="button" class="btn btn--primary" id="overlay-action" hidden></button>
+          <button type="button" class="btn btn--link" id="overlay-secondary" hidden>Use an image or video instead</button>
         </div>
       </div>
+
+      <div class="dropzone" id="dropzone" hidden>
+        <div class="dropzone__label">Drop an image or video</div>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

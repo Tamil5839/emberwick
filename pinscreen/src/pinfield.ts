@@ -6,11 +6,11 @@ import {
   BufferAttribute,
   BufferGeometry,
   CanvasTexture,
-  Color,
   DynamicDrawUsage,
   Group,
   InstancedBufferAttribute,
   InstancedMesh,
+  type Material,
   Mesh,
   MeshDepthMaterial,
   MeshStandardMaterial,
@@ -18,7 +18,7 @@ import {
   type WebGLProgramParametersWithUniforms,
 } from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { BOARD_WIDTH, MAX_DEPTH, ROW_SPACING, settings } from './settings';
+import { BOARD_WIDTH, FINISHES, type FinishName, MAX_DEPTH, ROW_SPACING, settings } from './settings';
 
 /** Pin radius as a fraction of the pitch; the rest is the gap between neighbours. */
 const PIN_RADIUS = 0.43;
@@ -39,6 +39,13 @@ const AO_STRENGTH = 6;
 const AO_REACH = 0.6;
 const AO_MIN_RADIUS = 2;
 const AO_MAX_RADIUS = 12;
+
+/**
+ * Ceiling on pin radiance before tone mapping. Unlimited normally; the
+ * depth-of-field path resolves MSAA in HDR, where a sub-pixel glint would
+ * otherwise survive as a white firefly, so it lowers this while active.
+ */
+export const pinHighlightLimit = { value: 1e4 };
 
 export interface PinLayout {
   cols: number;
@@ -91,26 +98,20 @@ export class PinField {
   private restZ = 0;
   private headHeight = 0;
 
-  readonly pinMaterial: MeshStandardMaterial;
+  private readonly pinMaterial: MeshStandardMaterial;
   private readonly pinDepthMaterial: MeshDepthMaterial;
   private readonly plateMaterial: MeshStandardMaterial;
   private readonly frameMaterial: MeshStandardMaterial;
   private readonly aoUniform = { value: AO_STRENGTH };
 
   constructor() {
-    this.pinMaterial = new MeshStandardMaterial({
-      color: new Color('#c9ccd0'),
-      metalness: 0.9,
-      roughness: 0.35,
-    });
+    this.pinMaterial = new MeshStandardMaterial();
     this.pinMaterial.onBeforeCompile = (shader) => this.injectOcclusion(shader);
     this.pinMaterial.customProgramCacheKey = () => 'pin-occlusion';
+    this.setFinish(settings.finish);
     // The shadow pass must trim the shafts exactly like the colour pass does.
     this.pinDepthMaterial = new MeshDepthMaterial();
-    this.pinDepthMaterial.onBeforeCompile = (shader) => {
-      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', TRIM_SHAFT);
-    };
-    this.pinDepthMaterial.customProgramCacheKey = () => 'pin-depth';
+    trimShaftsIn(this.pinDepthMaterial);
 
     this.plateMaterial = new MeshStandardMaterial({ color: '#ffffff', metalness: 0.05, roughness: 0.82 });
     this.frameMaterial = new MeshStandardMaterial({ color: '#121214', metalness: 0.3, roughness: 0.8 });
@@ -160,11 +161,19 @@ export class PinField {
     this.group.add(this.board, pins);
   }
 
+  setFinish(name: FinishName): void {
+    const finish = FINISHES[name];
+    this.pinMaterial.color.set(finish.color);
+    this.pinMaterial.metalness = finish.metalness;
+    this.pinMaterial.roughness = finish.roughness;
+  }
+
   /**
    * Eases every pin toward its target (value * depth) and writes the result
-   * straight into the instance matrix buffer. Allocation-free.
+   * straight into the instance matrix buffer; `snap` jumps straight there.
+   * Allocation-free.
    */
-  update(values: Float32Array, dt: number): void {
+  update(values: Float32Array, dt: number, snap = false): void {
     const pins = this.pins;
     if (!pins) return;
     const { heights } = this;
@@ -172,7 +181,7 @@ export class PinField {
     const count = heights.length;
     const depth = Math.min(settings.depth, MAX_DEPTH);
     // Frame-rate independent version of "cover `smoothing` of the gap every 60 Hz frame".
-    const k = 1 - Math.pow(1 - Math.min(Math.max(settings.smoothing, 0.001), 1), Math.min(dt, 0.1) * 60);
+    const k = snap ? 1 : 1 - Math.pow(1 - Math.min(Math.max(settings.smoothing, 0.001), 1), Math.min(dt, 0.1) * 60);
     const restZ = this.restZ;
 
     for (let i = 0, o = 14; i < count; i++, o += 16) {
@@ -232,6 +241,7 @@ export class PinField {
 
   private injectOcclusion(shader: WebGLProgramParametersWithUniforms): void {
     shader.uniforms.pinAOStrength = this.aoUniform;
+    shader.uniforms.pinHighlightLimit = pinHighlightLimit;
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
@@ -244,7 +254,7 @@ export class PinField {
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
-        '#include <common>\nvarying float vPinBuried;\nuniform float pinAOStrength;',
+        '#include <common>\nvarying float vPinBuried;\nuniform float pinAOStrength;\nuniform float pinHighlightLimit;',
       )
       .replace(
         '#include <aomap_fragment>',
@@ -253,6 +263,14 @@ export class PinField {
           'float pinAO = exp( -vPinBuried * pinAOStrength );',
           'reflectedLight.indirectDiffuse *= pinAO;',
           'reflectedLight.indirectSpecular *= pinAO;',
+        ].join('\n'),
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        [
+          '#include <opaque_fragment>',
+          'float pinPeak = max( max( gl_FragColor.r, gl_FragColor.g ), gl_FragColor.b );',
+          'if ( pinPeak > pinHighlightLimit ) gl_FragColor.rgb *= pinHighlightLimit / pinPeak;',
         ].join('\n'),
       );
   }
@@ -330,7 +348,22 @@ export class PinField {
  * shadow-map cost proportional to what's visible.
  */
 const TRIM_SHAFT = /* glsl */ `#include <begin_vertex>
-if ( position.z < -0.5 ) transformed.z = min( ${SHAFT_END_Z.toFixed(3)} - instanceMatrix[ 3 ].z, -0.001 );`;
+#ifdef USE_INSTANCING
+if ( position.z < -0.5 ) transformed.z = min( ${SHAFT_END_Z.toFixed(3)} - instanceMatrix[ 3 ].z, -0.001 );
+#endif`;
+
+/**
+ * Makes a depth material trim pin shafts too. Only instanced meshes are
+ * affected, so it's safe on override materials that also draw the board.
+ */
+export function trimShaftsIn(material: Material): void {
+  const previous = material.onBeforeCompile.bind(material);
+  material.onBeforeCompile = (shader, renderer) => {
+    previous(shader, renderer);
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', TRIM_SHAFT);
+  };
+  material.customProgramCacheKey = () => 'pin-trimmed-depth';
+}
 
 /**
  * A pin: an open cylinder shaft (its bottom end is trimmed in the vertex

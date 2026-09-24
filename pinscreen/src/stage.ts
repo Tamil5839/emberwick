@@ -5,7 +5,10 @@ import {
   BufferAttribute,
   BufferGeometry,
   CustomBlending,
+  HalfFloatType,
+  type IUniform,
   Mesh,
+  type MeshDepthMaterial,
   MathUtils,
   OneFactor,
   OrthographicCamera,
@@ -15,11 +18,18 @@ import {
   ShaderMaterial,
   SrcColorFactor,
   SRGBColorSpace,
+  Vector2,
   Vector3,
   WebGLRenderer,
+  WebGLRenderTarget,
   ZeroFactor,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { pinHighlightLimit, trimShaftsIn } from './pinfield';
 import { settings } from './settings';
 
 /** A longish lens flattens perspective the way a product photographer would shoot. */
@@ -32,6 +42,12 @@ const FRAME_MARGIN = 1.06;
 const MAX_PIXEL_RATIO = 2;
 /** How much the frame darkens toward its corners, like a lens in a dark studio. */
 const VIGNETTE = 0.5;
+/** Largest bokeh blur, as a fraction of the frame, however far out of focus. */
+const MAX_BLUR = 0.012;
+/** Highlight ceiling (linear radiance) while depth of field is on; see pinHighlightLimit. */
+const DOF_HIGHLIGHT_LIMIT = 3;
+/** Bokeh aperture at full blur: fraction of the frame blurred per world unit off the focus plane. */
+const APERTURE_AT_FULL_BLUR = 0.008;
 
 export class Stage {
   readonly renderer: WebGLRenderer;
@@ -44,6 +60,7 @@ export class Stage {
   private readonly target = new Vector3(0, 0, 0.25);
   private readonly vignette = createVignette();
   private readonly screenCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  private dof: { composer: EffectComposer; bokeh: Record<string, IUniform> } | null = null;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -59,6 +76,9 @@ export class Stage {
     // three r182+ folded PCFSoftShadowMap into PCFShadowMap, which now does soft,
     // noise-rotated hardware PCF on its own (softness comes from shadow.radius).
     this.renderer.shadowMap.type = PCFShadowMap;
+    // Shadows are re-rendered only when render() is told something moved, and never
+    // twice a frame (the depth-of-field pass renders the scene a second time).
+    this.renderer.shadowMap.autoUpdate = false;
 
     this.camera = new PerspectiveCamera(FOV, 1, 0.1, 400);
     this.camera.up.set(0, 1, 0);
@@ -93,6 +113,10 @@ export class Stage {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.vignette.material.uniforms.aspect.value = width / height;
+    if (this.dof) {
+      this.dof.composer.setPixelRatio(this.renderer.getPixelRatio());
+      this.dof.composer.setSize(width, height);
+    }
   }
 
   /** Distance at which the whole board fits the current viewport. */
@@ -122,14 +146,45 @@ export class Stage {
     this.controls.update();
   }
 
-  render(): void {
+  /** Draws a frame; pass true when pins or the light moved so the shadows follow. */
+  render(shadowsChanged: boolean): void {
     this.renderer.toneMappingExposure = settings.exposure;
+    this.renderer.shadowMap.needsUpdate = shadowsChanged;
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+
+    pinHighlightLimit.value = settings.depthOfField ? DOF_HIGHLIGHT_LIMIT : 1e4;
+    if (settings.depthOfField) {
+      const { composer, bokeh } = this.depthOfField();
+      // Auto-focus on the orbit target, so the board stays sharp wherever you swing.
+      bokeh.focus.value = this.camera.position.distanceTo(this.controls.target);
+      bokeh.aperture.value = settings.blur * APERTURE_AT_FULL_BLUR;
+      composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+
     // Multiply a soft vignette over the frame without clearing it.
     this.renderer.autoClear = false;
     this.renderer.render(this.vignette, this.screenCamera);
     this.renderer.autoClear = true;
+  }
+
+  /** Built on first use: scene → bokeh → tone mapping and sRGB, multisampled like the direct path. */
+  private depthOfField(): { composer: EffectComposer; bokeh: Record<string, IUniform> } {
+    if (this.dof) return this.dof;
+    const target = new WebGLRenderTarget(1, 1, { type: HalfFloatType, samples: 4 });
+    const composer = new EffectComposer(this.renderer, target);
+    const bokeh = new BokehPass(this.scene, this.camera, { focus: 40, aperture: 0, maxblur: MAX_BLUR });
+    // Its depth prepass uses an override material, so teach it to trim pin shafts too.
+    trimShaftsIn((bokeh as unknown as { _materialDepth: MeshDepthMaterial })._materialDepth);
+    composer.addPass(new RenderPass(this.scene, this.camera));
+    composer.addPass(bokeh);
+    composer.addPass(new OutputPass());
+    this.dof = { composer, bokeh: bokeh.uniforms as Record<string, IUniform> };
+    const size = this.renderer.getSize(new Vector2());
+    composer.setPixelRatio(this.renderer.getPixelRatio());
+    composer.setSize(size.x, size.y);
+    return this.dof;
   }
 }
 

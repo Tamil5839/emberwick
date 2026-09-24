@@ -1,7 +1,27 @@
-// DOM chrome: the camera permission / error card, the stats readout and the
-// reset-view button. The control panel joins this module in phase 2.
+// DOM chrome: the control panel, keyboard shortcuts, drag-and-drop, the camera
+// permission / error card, toasts and the stats readout.
 
+import GUI, { type Controller } from 'lil-gui';
 import type { CameraErrorKind } from './camera';
+import {
+  DENSITIES,
+  FINISHES,
+  MAX_DEPTH,
+  resetSettings,
+  saveSettings,
+  settings,
+  type SourceName,
+} from './settings';
+
+export interface UIHandlers {
+  onResetView(): void;
+  onDensityChange(): void;
+  onFinishChange(): void;
+  onUseWebcam(): void;
+  onFile(file: File): void;
+  /** After "Reset all settings": re-apply anything that isn't read live every frame. */
+  onSettingsReset(): void;
+}
 
 const ERROR_TITLES: Record<CameraErrorKind, string> = {
   denied: 'Camera access is blocked',
@@ -10,6 +30,8 @@ const ERROR_TITLES: Record<CameraErrorKind, string> = {
   insecure: 'Camera needs a secure page',
   unknown: 'Camera failed to start',
 };
+
+const MEDIA_ACCEPT = 'image/*,video/*';
 
 function $<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -23,17 +45,179 @@ export class UI {
   private readonly title = $<HTMLHeadingElement>('overlay-title');
   private readonly body = $<HTMLParagraphElement>('overlay-body');
   private readonly action = $<HTMLButtonElement>('overlay-action');
+  private readonly secondary = $<HTMLButtonElement>('overlay-secondary');
   private readonly stats = $<HTMLSpanElement>('stats');
+  private readonly frozenBadge = $<HTMLSpanElement>('frozen-badge');
+  private readonly toastEl = $<HTMLDivElement>('toast');
+  private readonly dropzone = $<HTMLDivElement>('dropzone');
   private onAction: (() => void) | null = null;
+  private toastTimer = 0;
+
+  private readonly gui: GUI;
+  private sourceControl!: Controller;
+  private sweepSpeedControl!: Controller;
+  private blurControl!: Controller;
+  private activeSource: SourceName = 'Webcam';
 
   private frames = 0;
   private statsTime = 0;
   private pinCount = 0;
 
-  constructor(handlers: { onResetView: () => void }) {
+  constructor(private readonly handlers: UIHandlers) {
     $<HTMLButtonElement>('reset-view').addEventListener('click', handlers.onResetView);
     this.action.addEventListener('click', () => this.onAction?.());
+    this.secondary.addEventListener('click', () => this.pickFile(MEDIA_ACCEPT));
+
+    this.gui = this.buildPanel();
+    this.syncDependentControls();
+    this.syncFrozen();
+    this.bindKeys();
+    this.bindDrop();
   }
+
+  // ─── Control panel ───────────────────────────────────────────────────────
+
+  private buildPanel(): GUI {
+    const gui = new GUI({ title: 'Pinscreen' });
+    const h = this.handlers;
+
+    const source = gui.addFolder('Source');
+    this.sourceControl = source
+      .add(settings, 'source', ['Webcam', 'Image', 'Video'])
+      .name('Input')
+      .onChange((value: SourceName) => this.chooseSource(value));
+    source.add({ open: () => this.pickFile(MEDIA_ACCEPT) }, 'open').name('Open image or video…');
+
+    const pins = gui.addFolder('Pins');
+    pins.add(settings, 'density', Object.keys(DENSITIES)).name('Density').onChange(() => h.onDensityChange());
+    pins.add(settings, 'finish', Object.keys(FINISHES)).name('Finish').onChange(() => h.onFinishChange());
+    pins.add(settings, 'depth', 0.1, MAX_DEPTH, 0.01).name('Depth');
+    pins.add(settings, 'smoothing', 0.02, 1, 0.01).name('Smoothing');
+    pins.add(settings, 'frozen').name('Freeze (Space)').listen().onChange(() => this.syncFrozen());
+
+    const picture = gui.addFolder('Picture');
+    picture.add(settings, 'autoLevels').name('Auto levels');
+    picture.add(settings, 'contrast', 0.5, 3, 0.01).name('Contrast');
+    picture.add(settings, 'gamma', 0.3, 3, 0.01).name('Gamma');
+    picture.add(settings, 'invert').name('Invert (bright = in)');
+
+    const light = gui.addFolder('Light');
+    light.add(settings, 'lightElevation', 3, 60, 0.5).name('Angle (elevation)');
+    light.add(settings, 'lightAzimuth', 0, 360, 1).name('Direction').listen();
+    light.add(settings, 'autoSweep').name('Auto sweep').onChange(() => this.syncDependentControls());
+    this.sweepSpeedControl = light.add(settings, 'sweepSpeed', 1, 45, 0.5).name('Sweep speed (°/s)');
+    light.add(settings, 'lightIntensity', 0, 10, 0.1).name('Intensity');
+    light.add(settings, 'environment', 0, 2, 0.01).name('Reflections');
+
+    const camera = gui.addFolder('Camera');
+    camera.add(settings, 'exposure', 0.2, 2.5, 0.01).name('Exposure');
+    camera.add(settings, 'depthOfField').name('Depth of field').onChange(() => this.syncDependentControls());
+    this.blurControl = camera.add(settings, 'blur', 0, 1, 0.01).name('Blur');
+    camera.add({ reset: () => h.onResetView() }, 'reset').name('Reset view');
+    camera.close();
+
+    gui.add({ reset: () => this.resetAll() }, 'reset').name('Reset all settings');
+    gui.onFinishChange(() => saveSettings());
+
+    if (window.innerWidth < 720) gui.close();
+    return gui;
+  }
+
+  private chooseSource(value: SourceName): void {
+    if (value === 'Webcam') {
+      this.handlers.onUseWebcam();
+      return;
+    }
+    // Stay on the current source until a file actually loads.
+    this.setSource(this.activeSource);
+    this.pickFile(value === 'Image' ? 'image/*' : 'video/*');
+  }
+
+  /** Reflects the source that's really live (after a file loads, or fails to). */
+  setSource(kind: SourceName): void {
+    this.activeSource = kind;
+    settings.source = kind;
+    this.sourceControl.updateDisplay();
+  }
+
+  private pickFile(accept: string): void {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (file) this.handlers.onFile(file);
+    });
+    input.click();
+  }
+
+  private resetAll(): void {
+    resetSettings();
+    this.handlers.onSettingsReset();
+    for (const c of this.gui.controllersRecursive()) c.updateDisplay();
+    this.syncDependentControls();
+    this.syncFrozen();
+    this.toast('Settings reset to defaults');
+  }
+
+  private syncDependentControls(): void {
+    this.sweepSpeedControl.enable(settings.autoSweep);
+    this.blurControl.enable(settings.depthOfField);
+  }
+
+  private syncFrozen(): void {
+    this.frozenBadge.hidden = !settings.frozen;
+  }
+
+  // ─── Keyboard and drag-and-drop ─────────────────────────────────────────
+
+  private bindKeys(): void {
+    window.addEventListener('keydown', (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+      if (isTyping(e.target)) return;
+
+      if (e.code === 'KeyH') {
+        e.preventDefault();
+        const hide = !this.gui._hidden;
+        this.gui.show(!hide);
+        if (hide) this.toast('Panel hidden · press H to bring it back');
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        // Don't let Space also "click" whichever button or checkbox has focus.
+        (document.activeElement as HTMLElement | null)?.blur?.();
+        settings.frozen = !settings.frozen;
+        this.syncFrozen();
+      }
+    });
+  }
+
+  private bindDrop(): void {
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false;
+    window.addEventListener('dragenter', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth++;
+      this.dropzone.hidden = false;
+    });
+    window.addEventListener('dragover', (e) => {
+      if (hasFiles(e)) e.preventDefault();
+    });
+    window.addEventListener('dragleave', (e) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) this.dropzone.hidden = true;
+    });
+    window.addEventListener('drop', (e) => {
+      e.preventDefault();
+      depth = 0;
+      this.dropzone.hidden = true;
+      const file = e.dataTransfer?.files[0];
+      if (file) this.handlers.onFile(file);
+    });
+  }
+
+  // ─── Camera card, toasts, stats ─────────────────────────────────────────
 
   showCameraPending(): void {
     this.show(
@@ -57,10 +241,18 @@ export class UI {
     this.title.textContent = title;
     this.body.textContent = body;
     this.action.hidden = !action;
+    this.secondary.hidden = state !== 'error';
     this.onAction = action?.run ?? null;
     if (action) this.action.textContent = action.label;
     this.overlay.hidden = false;
     if (action) this.action.focus();
+  }
+
+  toast(message: string): void {
+    this.toastEl.textContent = message;
+    this.toastEl.classList.add('toast--visible');
+    window.clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('toast--visible'), 2600);
   }
 
   setPinCount(count: number): void {
@@ -77,4 +269,11 @@ export class UI {
     this.frames = 0;
     this.statsTime = now;
   }
+}
+
+/** True when a key press belongs to a text field rather than to the app. */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  return target instanceof HTMLInputElement && !['checkbox', 'radio', 'button', 'range'].includes(target.type);
 }

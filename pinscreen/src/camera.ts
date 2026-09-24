@@ -55,6 +55,8 @@ export class Webcam {
       throw toCameraError(err);
     }
 
+    // An overlapping start() may have opened a stream meanwhile; never leak it.
+    this.stop();
     this.stream = stream;
     for (const track of stream.getVideoTracks()) {
       track.addEventListener('ended', () => {
