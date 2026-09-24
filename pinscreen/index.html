@@ -19,7 +19,20 @@
       </header>
 
       <div class="hud hud--bottom-right" data-ui>
+        <button type="button" class="btn btn--rec" id="record" title="Record a video (R)">● Record</button>
         <button type="button" class="btn" id="reset-view" title="Reset the camera view">Reset view</button>
+      </div>
+
+      <div class="rec" id="rec" role="status" hidden>
+        <span class="rec__dot" aria-hidden="true"></span>
+        <span class="rec__time" id="rec-time">0:00</span>
+        <span class="rec__meta" id="rec-meta"></span>
+        <button type="button" class="rec__stop" id="rec-stop">Stop</button>
+      </div>
+
+      <div class="countdown" id="countdown" hidden>
+        <span class="countdown__num" id="countdown-num"></span>
+        <span class="countdown__hint">Esc to cancel</span>
       </div>
 
       <div class="overlay" id="overlay" hidden>

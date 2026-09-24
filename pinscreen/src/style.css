@@ -31,12 +31,22 @@ body {
   inset: 0;
 }
 
+/* Centred; its CSS size is set from JS so a fixed output frame can letterbox. */
 #stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
   display: block;
   width: 100%;
   height: 100%;
+  transform: translate(-50%, -50%);
   outline: none;
   touch-action: none;
+}
+
+/* A hairline shows the edges of a fixed output frame (never part of the recording). */
+#stage.framed {
+  outline: 1px solid rgba(233, 230, 223, 0.14);
 }
 
 /* Video elements only feed the sampler; they must stay "rendered" so every
@@ -202,6 +212,146 @@ body {
   font-size: 16px;
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+
+/* ─── Recording ─────────────────────────────────────────────────────── */
+
+.btn--rec {
+  color: #ffb4ae;
+}
+
+.rec {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 14px;
+  border: 1px solid rgba(255, 90, 79, 0.35);
+  border-radius: 999px;
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font: 500 12px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.rec[hidden] {
+  display: none;
+}
+
+.rec__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 10px var(--danger);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+.rec__time {
+  min-width: 34px;
+  color: var(--ink);
+}
+
+.rec__meta {
+  color: var(--ink-dim);
+}
+
+.rec--long .rec__time {
+  color: var(--accent);
+}
+
+.rec--saving .rec__dot {
+  animation: none;
+  background: var(--ink-dim);
+  box-shadow: none;
+}
+
+.rec__stop {
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: var(--danger);
+  color: #fff;
+  font: 600 11px/1 var(--font);
+  cursor: pointer;
+}
+
+.rec--saving .rec__stop {
+  display: none;
+}
+
+.countdown {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 18px;
+  pointer-events: none;
+}
+
+.countdown[hidden] {
+  display: none;
+}
+
+.countdown__num {
+  font: 200 min(34vw, 240px) / 1 var(--font);
+  color: var(--ink);
+  text-shadow: 0 10px 60px rgba(0, 0, 0, 0.8);
+}
+
+.countdown__num--pop {
+  animation: count-pop 0.95s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.countdown__hint {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+
+/* While counting down or recording, and in clean mode, the chrome gets out of the way. */
+body.recording .lil-gui,
+body.recording [data-ui],
+body.clean .lil-gui,
+body.clean [data-ui] {
+  display: none !important;
+}
+
+body.recording #stage.framed,
+body.clean #stage.framed {
+  outline: none;
+}
+
+body.clean.idle,
+body.clean.idle * {
+  cursor: none !important;
+}
+
+@keyframes rec-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes count-pop {
+  from {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+  25% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.92);
+  }
 }
 
 /* lil-gui, dressed to match. */

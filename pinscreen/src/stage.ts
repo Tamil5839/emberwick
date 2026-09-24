@@ -39,6 +39,11 @@ const VIEW_AZIMUTH = 8;
 const VIEW_ELEVATION = -5;
 /** Breathing room around the board when framed. */
 const FRAME_MARGIN = 1.06;
+/**
+ * Views much narrower than the board (portrait, square) fill their height and
+ * crop the sides, which frames the face; wider ones show the whole board.
+ */
+const COVER_BELOW_ASPECT = 1.2;
 const MAX_PIXEL_RATIO = 2;
 /** How much the frame darkens toward its corners, like a lens in a dark studio. */
 const VIGNETTE = 0.5;
@@ -61,6 +66,10 @@ export class Stage {
   private readonly vignette = createVignette();
   private readonly screenCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private dof: { composer: EffectComposer; bokeh: Record<string, IUniform> } | null = null;
+  /** Output frame the view is letterboxed to (null fills the window). */
+  private frame: { width: number; height: number } | null = null;
+  /** Render at the frame's exact pixel size, for recording. */
+  private exact = false;
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({
@@ -108,21 +117,45 @@ export class Stage {
     this.controls.maxDistance = this.fitDistance() * 3;
   }
 
-  resize(width = window.innerWidth, height = window.innerHeight): void {
-    this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
+  /**
+   * Letterboxes the view to an output frame (null fills the window). With
+   * `exact`, the drawing buffer is exactly frame.width × frame.height pixels,
+   * whatever the window or screen density, which is what recording needs.
+   */
+  setFrame(frame: { width: number; height: number } | null, exact = false): void {
+    this.frame = frame;
+    this.exact = exact && frame !== null;
+    this.canvas.classList.toggle('framed', frame !== null);
+    this.resize();
+  }
+
+  resize(): void {
+    const { frame } = this;
+    const viewWidth = window.innerWidth;
+    const viewHeight = window.innerHeight;
+    const aspect = frame ? frame.width / frame.height : viewWidth / viewHeight;
+    const cssWidth = frame ? Math.min(viewWidth, viewHeight * aspect) : viewWidth;
+    const cssHeight = frame ? cssWidth / aspect : viewHeight;
+    this.canvas.style.width = `${cssWidth}px`;
+    this.canvas.style.height = `${cssHeight}px`;
+
+    const [bufferWidth, bufferHeight] = this.exact && frame ? [frame.width, frame.height] : [cssWidth, cssHeight];
+    this.renderer.setPixelRatio(this.exact ? 1 : Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
+    this.renderer.setSize(bufferWidth, bufferHeight, false);
+    this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
-    this.vignette.material.uniforms.aspect.value = width / height;
+    this.vignette.material.uniforms.aspect.value = aspect;
     if (this.dof) {
       this.dof.composer.setPixelRatio(this.renderer.getPixelRatio());
-      this.dof.composer.setSize(width, height);
+      this.dof.composer.setSize(bufferWidth, bufferHeight);
     }
   }
 
-  /** Distance at which the whole board fits the current viewport. */
+  /** Distance at which the board fills the current view (see COVER_BELOW_ASPECT). */
   private fitDistance(): number {
     const tanHalf = Math.tan(MathUtils.degToRad(FOV / 2));
     const fitHeight = (this.boardHeight / 2) / tanHalf;
+    if (this.camera.aspect < COVER_BELOW_ASPECT) return fitHeight * FRAME_MARGIN;
     const fitWidth = (this.boardWidth / 2) / (tanHalf * this.camera.aspect);
     return Math.max(fitHeight, fitWidth) * FRAME_MARGIN;
   }

@@ -1,17 +1,26 @@
 // DOM chrome: the control panel, keyboard shortcuts, drag-and-drop, the camera
-// permission / error card, toasts and the stats readout.
+// permission / error card, recording countdown and REC indicator, clean mode,
+// toasts and the stats readout.
 
 import GUI, { type Controller } from 'lil-gui';
 import type { CameraErrorKind } from './camera';
+import { supportedFormats } from './recorder';
 import {
   DENSITIES,
   FINISHES,
+  FRAMES,
   MAX_DEPTH,
   resetSettings,
   saveSettings,
   settings,
   type SourceName,
 } from './settings';
+
+export type RecordingState = 'idle' | 'countdown' | 'recording' | 'saving';
+
+/** Past this, the take is longer than X/Twitter accepts on a standard account. */
+const X_LIMIT_SECONDS = 140;
+const CURSOR_IDLE_MS = 1500;
 
 export interface UIHandlers {
   onResetView(): void;
@@ -21,6 +30,10 @@ export interface UIHandlers {
   onFile(file: File): void;
   /** After "Reset all settings": re-apply anything that isn't read live every frame. */
   onSettingsReset(): void;
+  onFrameChange(): void;
+  /** Start a countdown, or stop / cancel whatever is in progress. */
+  onRecordToggle(): void;
+  onRecordCancel(): void;
 }
 
 const ERROR_TITLES: Record<CameraErrorKind, string> = {
@@ -50,13 +63,22 @@ export class UI {
   private readonly frozenBadge = $<HTMLSpanElement>('frozen-badge');
   private readonly toastEl = $<HTMLDivElement>('toast');
   private readonly dropzone = $<HTMLDivElement>('dropzone');
+  private readonly recordButton = $<HTMLButtonElement>('record');
+  private readonly recPill = $<HTMLDivElement>('rec');
+  private readonly recTime = $<HTMLSpanElement>('rec-time');
+  private readonly recMeta = $<HTMLSpanElement>('rec-meta');
+  private readonly countdown = $<HTMLDivElement>('countdown');
+  private readonly countdownNumber = $<HTMLSpanElement>('countdown-num');
   private onAction: (() => void) | null = null;
   private toastTimer = 0;
+  private cursorTimer = 0;
+  private shownSeconds = -1;
 
   private readonly gui: GUI;
   private sourceControl!: Controller;
   private sweepSpeedControl!: Controller;
   private blurControl!: Controller;
+  private recordControl!: Controller;
   private activeSource: SourceName = 'Webcam';
 
   private frames = 0;
@@ -67,6 +89,9 @@ export class UI {
     $<HTMLButtonElement>('reset-view').addEventListener('click', handlers.onResetView);
     this.action.addEventListener('click', () => this.onAction?.());
     this.secondary.addEventListener('click', () => this.pickFile(MEDIA_ACCEPT));
+    this.recordButton.addEventListener('click', () => handlers.onRecordToggle());
+    $<HTMLButtonElement>('rec-stop').addEventListener('click', () => handlers.onRecordToggle());
+    window.addEventListener('mousemove', () => this.wakeCursor());
 
     this.gui = this.buildPanel();
     this.syncDependentControls();
@@ -116,10 +141,26 @@ export class UI {
     camera.add({ reset: () => h.onResetView() }, 'reset').name('Reset view');
     camera.close();
 
+    const record = gui.addFolder('Record');
+    record
+      .add(settings, 'frame', ['Fill window', ...Object.keys(FRAMES)])
+      .name('Frame')
+      .onChange(() => h.onFrameChange());
+    const formats = supportedFormats();
+    if (!formats.includes(settings.recordFormat) && formats.length) settings.recordFormat = formats[0];
+    record.add(settings, 'recordFormat', formats.length ? formats : ['MP4']).name('Format').enable(formats.length > 0);
+    record.add(settings, 'recordQuality', ['Standard', 'High', 'Max']).name('Quality');
+    this.recordControl = record
+      .add({ record: () => h.onRecordToggle() }, 'record')
+      .name(formats.length ? '● Record (R)' : 'Recording not supported here')
+      .enable(formats.length > 0);
+    record.add(settings, 'cleanMode').name('Clean mode (C)').listen().onChange(() => this.applyCleanMode());
+
     gui.add({ reset: () => this.resetAll() }, 'reset').name('Reset all settings');
     gui.onFinishChange(() => saveSettings());
 
     if (window.innerWidth < 720) gui.close();
+    if (!formats.length) this.recordButton.hidden = true;
     return gui;
   }
 
@@ -154,6 +195,7 @@ export class UI {
   private resetAll(): void {
     resetSettings();
     this.handlers.onSettingsReset();
+    this.handlers.onFrameChange();
     for (const c of this.gui.controllersRecursive()) c.updateDisplay();
     this.syncDependentControls();
     this.syncFrozen();
@@ -187,8 +229,75 @@ export class UI {
         (document.activeElement as HTMLElement | null)?.blur?.();
         settings.frozen = !settings.frozen;
         this.syncFrozen();
+      } else if (e.code === 'KeyR') {
+        e.preventDefault();
+        this.handlers.onRecordToggle();
+      } else if (e.code === 'KeyC') {
+        e.preventDefault();
+        settings.cleanMode = !settings.cleanMode;
+        this.applyCleanMode();
+      } else if (e.code === 'Escape') {
+        this.handlers.onRecordCancel();
       }
     });
+  }
+
+  // ─── Recording and clean mode ───────────────────────────────────────────
+
+  /** Hides the chrome while counting down or recording, and flips the record buttons to "stop". */
+  setRecordingState(state: RecordingState, meta = ''): void {
+    const busy = state !== 'idle';
+    document.body.classList.toggle('recording', busy);
+    this.recPill.hidden = state !== 'recording' && state !== 'saving';
+    this.recPill.classList.toggle('rec--saving', state === 'saving');
+    if (state === 'recording') {
+      this.recMeta.textContent = meta;
+      this.shownSeconds = -1;
+      this.setRecordingTime(0);
+    }
+    if (state === 'saving') this.recTime.textContent = 'Saving…';
+    const label = state === 'idle' ? '● Record (R)' : state === 'countdown' ? '✕ Cancel (R)' : '■ Stop (R)';
+    this.recordControl.name(label);
+    this.recordButton.textContent = state === 'idle' ? '● Record' : '■ Stop';
+  }
+
+  /** Shows a big 3-2-1 numeral, or hides the countdown with null. */
+  showCountdown(n: number | null): void {
+    this.countdown.hidden = n === null;
+    if (n === null) return;
+    this.countdownNumber.textContent = String(n);
+    // Restart the pop-in animation for each number.
+    this.countdownNumber.classList.remove('countdown__num--pop');
+    void this.countdownNumber.offsetWidth;
+    this.countdownNumber.classList.add('countdown__num--pop');
+  }
+
+  /** Updates the REC timer; cheap to call every frame (the DOM only changes once a second). */
+  setRecordingTime(seconds: number): void {
+    const whole = Math.floor(seconds);
+    if (whole === this.shownSeconds) return;
+    this.shownSeconds = whole;
+    this.recTime.textContent = `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+    this.recPill.classList.toggle('rec--long', whole >= X_LIMIT_SECONDS);
+  }
+
+  private applyCleanMode(): void {
+    document.body.classList.toggle('clean', settings.cleanMode);
+    if (settings.cleanMode) {
+      this.toast('Clean mode · press C to exit');
+      this.wakeCursor();
+    } else {
+      document.body.classList.remove('idle');
+    }
+  }
+
+  /** In clean mode the cursor disappears after a moment of stillness, so it stays out of screen captures. */
+  private wakeCursor(): void {
+    document.body.classList.remove('idle');
+    window.clearTimeout(this.cursorTimer);
+    if (settings.cleanMode) {
+      this.cursorTimer = window.setTimeout(() => document.body.classList.add('idle'), CURSOR_IDLE_MS);
+    }
   }
 
   private bindDrop(): void {

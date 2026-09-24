@@ -8,8 +8,8 @@ pinscreen animation.
 Vite + TypeScript + Three.js, no framework, no backend. Your video never
 leaves the browser.
 
-> **Status: phase 2 (controls).** Recording and the extra modes land in
-> phases 3–4; they're listed under [Roadmap](#roadmap).
+> **Status: phase 3 (recording).** The extra modes land in phase 4; see
+> [Roadmap](#roadmap).
 
 ---
 
@@ -49,6 +49,9 @@ npm run preview   # serve the production build
 | --- | --- |
 | **H** | Hide / show the control panel |
 | **Space** | Freeze: pins hold their current shape (a *Frozen* badge shows) |
+| **R** | Record: starts the 3-2-1 countdown; press again to stop and save |
+| **Esc** | Cancel the countdown, or stop recording |
+| **C** | Clean mode: hide all UI, for capturing the window with OBS |
 
 Shortcuts are ignored while you're typing in a panel number field.
 
@@ -79,9 +82,44 @@ reloads. **Reset all settings** goes back to the defaults.
 | | Depth of field | Optional bokeh pass (EffectComposer), auto-focused on the orbit target, off by default |
 | | Blur | Depth-of-field strength |
 | | Reset view | Same as the button |
+| Record | Frame | Fill window · 16:9 (1920×1080) · 9:16 (1080×1920) · 1:1 (1080×1080). The live view letterboxes to the frame so you can compose the shot. |
+| | Format | MP4 (H.264) when the browser can record it, otherwise WebM |
+| | Quality | Standard 12 · High 24 · Max 40 Mbit/s |
+| | ● Record (R) | Countdown, record, stop, download |
+| | Clean mode (C) | Hide every bit of UI; the cursor hides after 1.5 s of stillness |
 
 In dev mode the app is also exposed on `window.__pinscreen` for poking at from
 the console (e.g. `__pinscreen.settings.depth = 1.4`).
+
+## Recording
+
+1. Pick a **Frame** in the Record folder. The view letterboxes to it (with a
+   faint outline) so you can compose your shot. Portrait and square frames
+   crop the board's sides and keep your face filling the height.
+2. Press **R** (or **● Record**). The panel and buttons disappear, the
+   renderer switches to the frame's exact pixel size, and a 3-2-1 countdown
+   runs. Esc cancels it.
+3. While recording, a red dot and timer sit at the top. They're page
+   overlays, never part of the video, and the timer turns gold past 2:20, the
+   longest video a standard X/Twitter account can post. You can still orbit
+   with the mouse and freeze with Space mid-take.
+4. Press **R** again (or **Stop**). The file downloads as
+   `pinscreen-2026-09-24-142233-9x16.mp4`.
+
+The canvas is captured with `canvas.captureStream(60)` into a
+`MediaRecorder`, so what you record is exactly what renders: 60 fps, vignette
+included, no UI. With **Fill window** selected, recordings come out 16:9.
+
+**MP4 vs WebM:** Chrome and Edge (126+) and Safari record MP4 (H.264), which X,
+Instagram, TikTok and YouTube all accept directly. Firefox only records WebM,
+which X and Instagram don't take. Convert it with
+`ffmpeg -i in.webm -c:v libx264 -crf 16 -pix_fmt yuv420p out.mp4`. If an
+upload site ever rejects a browser MP4, re-wrap it without re-encoding:
+`ffmpeg -i in.mp4 -c copy -movflags +faststart out.mp4`.
+
+**Clean mode (C)** is for recording with OBS or QuickTime instead: all UI
+disappears, the cursor hides when still, and the view keeps whatever Frame
+you chose. Press C again to bring everything back.
 
 ## How it works
 
@@ -114,7 +152,12 @@ the console (e.g. `__pinscreen.settings.depth = 1.4`).
    Optional depth of field runs through `EffectComposer` → `BokehPass` →
    `OutputPass` with a 4× multisampled target.
 6. **UI** (`ui.ts`): the lil-gui panel, shortcuts, drag-and-drop, the camera
-   card and toasts. Settings live in `settings.ts`.
+   card, the countdown and REC indicator, clean mode and toasts. Settings live
+   in `settings.ts`.
+7. **Recorder** (`recorder.ts`): format detection, `captureStream(60)` into
+   `MediaRecorder` (chunked every second), and the download. The stage
+   renders at the exact output size from the start of the countdown, so the
+   first recorded frame is already warm.
 
 ### Things that make it look like a photograph
 
@@ -183,6 +226,13 @@ the console (e.g. `__pinscreen.settings.depth = 1.4`).
   crisp crescent highlights. *Brass* is warm and vintage.
 - **Depth of field** is lovely at dramatic angles, but costs frame rate; leave
   it off for straight-on shots.
+- **For Reels/Shorts/TikTok** use the 9:16 frame: it crops to your face. For
+  X, 16:9 or 1:1 both look great in the timeline.
+- **Before a take**, check the fps readout: it should hold 60. If it dips,
+  drop a density step or turn off depth of field. Recording at 1080p is
+  usually lighter than a Retina window.
+- **Keep the tab in front while recording.** Browsers pause background tabs,
+  and the video would freeze.
 - **Smoothness:** plug the laptop in, close other heavy tabs, and make sure
   your browser has hardware acceleration on (Chrome: Settings → System).
 
@@ -199,12 +249,17 @@ the console (e.g. `__pinscreen.settings.depth = 1.4`).
   field, or make the window smaller.
 - **A video file won't play:** browsers only decode what they support. MP4
   (H.264) and WebM play everywhere; some `.mov` files don't.
+- **"Recording not supported here":** the browser has no `MediaRecorder`
+  (very old versions). Use current Chrome, Edge, Safari or Firefox, or use
+  clean mode with OBS.
+- **Recording is choppy:** the video can only be as smooth as the render loop.
+  Lower the density, turn off depth of field, close other heavy tabs, and plug
+  the laptop in.
 
 ## Roadmap
 
 - ~~Phase 1: core effect~~ ✓
 - ~~Phase 2: controls~~ ✓
-- **Phase 3, recording:** canvas capture to WebM/MP4 at 16:9, 9:16 and 1:1,
-  3-2-1 countdown, REC timer, clean mode.
+- ~~Phase 3: recording~~ ✓
 - **Phase 4, extras:** MediaPipe person segmentation, click ripples, text mode,
   breathing idle mode.

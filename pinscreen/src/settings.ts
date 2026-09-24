@@ -22,6 +22,17 @@ export const FINISHES: Record<FinishName, { color: string; metalness: number; ro
 
 export type SourceName = 'Webcam' | 'Image' | 'Video';
 
+export type FrameName = 'Fill window' | '16:9' | '9:16' | '1:1';
+export type RecordFormat = 'MP4' | 'WebM';
+export type RecordQuality = 'Standard' | 'High' | 'Max';
+
+/** Output frames. Recording renders at exactly these pixel sizes; "Fill window" records as 16:9. */
+export const FRAMES: Record<Exclude<FrameName, 'Fill window'>, { width: number; height: number; label: string }> = {
+  '16:9': { width: 1920, height: 1080, label: '16x9' },
+  '9:16': { width: 1080, height: 1920, label: '9x16' },
+  '1:1': { width: 1080, height: 1080, label: '1x1' },
+};
+
 /** Width of the pin field in world units. Kept fixed so every density frames the same. */
 export const BOARD_WIDTH = 16;
 
@@ -67,6 +78,13 @@ export const settings = {
   depthOfField: false,
   /** Depth-of-field strength, 0–1. */
   blur: 0.35,
+
+  /** Output framing: the preview letterboxes to it, and recordings use its exact size. */
+  frame: 'Fill window' as FrameName,
+  recordFormat: 'MP4' as RecordFormat,
+  recordQuality: 'High' as RecordQuality,
+  /** Hide every bit of UI, for capturing the window with OBS. */
+  cleanMode: false,
 };
 
 export type Settings = typeof settings;
@@ -74,7 +92,7 @@ export type Settings = typeof settings;
 const DEFAULTS: Readonly<Settings> = { ...settings };
 
 /** Settings that describe the moment rather than the look, so they're never restored on reload. */
-const TRANSIENT: ReadonlySet<keyof Settings> = new Set(['source', 'frozen']);
+const TRANSIENT: ReadonlySet<keyof Settings> = new Set(['source', 'frozen', 'cleanMode']);
 const STORAGE_KEY = 'pinscreen.settings.v1';
 
 /** Restores the saved look, ignoring anything missing, stale or of the wrong type. */
@@ -93,6 +111,7 @@ export function loadSettings(): void {
   }
   if (!(settings.density in DENSITIES)) settings.density = DEFAULTS.density;
   if (!(settings.finish in FINISHES)) settings.finish = DEFAULTS.finish;
+  if (settings.frame !== 'Fill window' && !(settings.frame in FRAMES)) settings.frame = DEFAULTS.frame;
 }
 
 export function saveSettings(): void {

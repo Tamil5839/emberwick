@@ -1,11 +1,12 @@
 import { CameraError, Webcam } from './camera';
 import { Lighting } from './lighting';
 import { PinField } from './pinfield';
+import { download, Recorder } from './recorder';
 import { Sampler } from './sampler';
-import { DENSITIES, loadSettings, settings } from './settings';
+import { DENSITIES, FRAMES, loadSettings, settings } from './settings';
 import { Sources } from './source';
 import { Stage } from './stage';
-import { UI } from './ui';
+import { type RecordingState, UI } from './ui';
 
 loadSettings();
 
@@ -29,6 +30,12 @@ const ui = new UI({
     if (builtDensity !== settings.density) buildBoard();
     pins.setFinish(settings.finish);
   },
+  onFrameChange: () => applyFrame(),
+  onRecordToggle: () => toggleRecording(),
+  onRecordCancel: () => {
+    if (recState === 'countdown') cancelCountdown();
+    else if (recState === 'recording') stopRecording();
+  },
 });
 
 stage.scene.add(pins.group);
@@ -37,6 +44,10 @@ let builtDensity = settings.density;
 /** Set when the pins were rebuilt while frozen: snap them to the next frame, then hold. */
 let snapWhenFrozen = false;
 let shadowsDirty = true;
+
+const recorder = new Recorder();
+let recState: RecordingState = 'idle';
+let countdownTimer = 0;
 
 function buildBoard(): void {
   const { cols, rows } = DENSITIES[settings.density];
@@ -52,6 +63,7 @@ function buildBoard(): void {
 }
 
 buildBoard();
+applyFrame();
 stage.resetView();
 
 async function startCamera(): Promise<void> {
@@ -91,6 +103,87 @@ async function useFile(file: File): Promise<void> {
   }
 }
 
+// ─── Recording: 3-2-1, capture at the exact output size, save ────────────
+
+/** Letterbox the live view to the chosen output frame (when not recording). */
+function applyFrame(): void {
+  if (recState !== 'idle') return;
+  stage.setFrame(settings.frame === 'Fill window' ? null : FRAMES[settings.frame]);
+}
+
+function setRecState(state: RecordingState, meta = ''): void {
+  recState = state;
+  ui.setRecordingState(state, meta);
+}
+
+function toggleRecording(): void {
+  if (recState === 'idle') startCountdown();
+  else if (recState === 'countdown') cancelCountdown();
+  else if (recState === 'recording') stopRecording();
+}
+
+function startCountdown(): void {
+  // "Fill window" records as 16:9, the closest match to a laptop screen.
+  const name = settings.frame === 'Fill window' ? '16:9' : settings.frame;
+  const output = FRAMES[name];
+  // Switch to the exact pixel size now, so the first recorded frame is already warm.
+  stage.setFrame(output, true);
+  setRecState('countdown');
+  let n = 3;
+  ui.showCountdown(n);
+  countdownTimer = window.setInterval(() => {
+    n--;
+    if (n > 0) {
+      ui.showCountdown(n);
+      return;
+    }
+    window.clearInterval(countdownTimer);
+    ui.showCountdown(null);
+    try {
+      recorder.start(canvas, settings.recordFormat, settings.recordQuality, output.label);
+      setRecState('recording', `${name} · ${output.width}×${output.height}`);
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err));
+      endRecording();
+    }
+  }, 1000);
+}
+
+function cancelCountdown(): void {
+  window.clearInterval(countdownTimer);
+  ui.showCountdown(null);
+  endRecording();
+  ui.toast('Recording cancelled');
+}
+
+async function stopRecording(): Promise<void> {
+  setRecState('saving');
+  try {
+    const recording = await recorder.stop();
+    if (recording) {
+      download(recording);
+      const mb = (recording.blob.size / 1_000_000).toFixed(1);
+      ui.toast(`Saved ${recording.filename} · ${mb} MB`);
+    }
+  } catch (err) {
+    ui.toast(`Recording failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    endRecording();
+  }
+}
+
+function endRecording(): void {
+  setRecState('idle');
+  applyFrame();
+}
+
+// Don't lose a take to a stray reload or tab close.
+window.addEventListener('beforeunload', (e) => {
+  if (recState !== 'idle') e.preventDefault();
+});
+
+// ─── Frame loop ──────────────────────────────────────────────────────────
+
 let last = performance.now();
 function frame(now: number): void {
   const dt = Math.min((now - last) / 1000, 0.1);
@@ -114,6 +207,7 @@ function frame(now: number): void {
 
   stage.render(shadowsChanged);
   ui.tick(now);
+  if (recState === 'recording') ui.setRecordingTime(recorder.elapsed);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -122,5 +216,5 @@ startCamera();
 
 // Handy for poking at from the dev console: __pinscreen.settings.depth = 1.2
 if (import.meta.env.DEV) {
-  Object.assign(window, { __pinscreen: { settings, stage, pins, lighting, sampler, sources, ui } });
+  Object.assign(window, { __pinscreen: { settings, stage, pins, lighting, sampler, sources, ui, recorder } });
 }
