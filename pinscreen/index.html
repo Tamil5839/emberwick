@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050506" />
+    <title>Pinscreen</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="stage"></canvas>
+      <video id="webcam" class="feed" playsinline muted></video>
+
+      <header class="hud hud--top-left" data-ui>
+        <span class="wordmark">Pinscreen</span>
+        <span class="stats" id="stats"></span>
+        <span class="badge" id="frozen-badge" hidden>Frozen</span>
+      </header>
+
+      <div class="hud hud--bottom-right" data-ui>
+        <button type="button" class="btn btn--rec" id="record" title="Record a video (R)">● Record</button>
+        <button type="button" class="btn" id="reset-view" title="Reset the camera view">Reset view</button>
+      </div>
+
+      <div class="rec" id="rec" role="status" hidden>
+        <span class="rec__dot" aria-hidden="true"></span>
+        <span class="rec__time" id="rec-time">0:00</span>
+        <span class="rec__meta" id="rec-meta"></span>
+        <button type="button" class="rec__stop" id="rec-stop">Stop</button>
+      </div>
+
+      <div class="countdown" id="countdown" hidden>
+        <span class="countdown__num" id="countdown-num"></span>
+        <span class="countdown__hint">Esc to cancel</span>
+      </div>
+
+      <div class="overlay" id="overlay" hidden>
+        <div class="card" role="dialog" aria-live="polite" aria-labelledby="overlay-title">
+          <div class="card__icon" id="overlay-icon" aria-hidden="true"></div>
+          <h1 class="card__title" id="overlay-title"></h1>
+          <p class="card__body" id="overlay-body"></p>
+          <button type="button" class="btn btn--primary" id="overlay-action" hidden></button>
+          <button type="button" class="btn btn--link" id="overlay-secondary" hidden>Use an image or video instead</button>
+        </div>
+      </div>
+
+      <div class="dropzone" id="dropzone" hidden>
+        <div class="dropzone__label">Drop an image or video</div>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
